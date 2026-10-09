@@ -1,0 +1,551 @@
+--==================================================
+-- PAUL CHEST FARM
+-- Fireworks Playground | Delta iOS
+-- Compact UI | Auto Farm | Exit Shop | Instant Prompt
+-- Auto Server Hop | Auto Execute
+--==================================================
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+local player = Players.LocalPlayer
+local MARKER = "Ö"
+
+-- Publica el script completo y pega aquí su URL RAW.
+local PAUL_SCRIPT_URL = "PEGA_AQUI_LA_URL_RAW_DE_PAUL_CHEST_FARM"
+
+local running = false
+local hopping = false
+local closed = false
+local attempted = {}
+local foundChests = false
+local originalHoldDurations = {}
+
+--==================================================
+-- UI COMPACTA EN EL BORDE DERECHO
+--==================================================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "PaulChestFarm"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local window = Instance.new("Frame")
+window.Name = "MainWindow"
+window.Size = UDim2.fromOffset(190, 205)
+window.Position = UDim2.new(1, -200, 0.35, 0)
+window.BackgroundColor3 = Color3.fromRGB(17, 20, 30)
+window.BorderSizePixel = 0
+window.Parent = gui
+
+Instance.new("UICorner", window).CornerRadius =
+    UDim.new(0, 10)
+
+local outline = Instance.new("UIStroke", window)
+outline.Color = Color3.fromRGB(0, 225, 255)
+outline.Thickness = 1.5
+
+local header = Instance.new("TextLabel")
+header.Size = UDim2.new(1, -10, 0, 28)
+header.Position = UDim2.fromOffset(5, 0)
+header.BackgroundTransparency = 1
+header.Text = "PAUL CHEST FARM"
+header.TextColor3 = Color3.fromRGB(0, 225, 255)
+header.Font = Enum.Font.GothamBlack
+header.TextSize = 12
+header.Parent = window
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -10, 0, 20)
+status.Position = UDim2.fromOffset(5, 28)
+status.BackgroundTransparency = 1
+status.Text = "Iniciando..."
+status.TextColor3 = Color3.fromRGB(220, 220, 230)
+status.Font = Enum.Font.Gotham
+status.TextSize = 10
+status.TextTruncate = Enum.TextTruncate.AtEnd
+status.Parent = window
+
+local function makeButton(text, y, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -16, 0, 30)
+    b.Position = UDim2.fromOffset(8, y)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 10
+    b.Parent = window
+
+    Instance.new("UICorner", b).CornerRadius =
+        UDim.new(0, 7)
+
+    return b
+end
+
+local autoBtn = makeButton(
+    "AUTO FARM: ON", 51,
+    Color3.fromRGB(20, 145, 100)
+)
+
+local stopBtn = makeButton(
+    "STOP", 86,
+    Color3.fromRGB(145, 40, 50)
+)
+
+local hopBtn = makeButton(
+    "SERVER HOP MANUAL", 121,
+    Color3.fromRGB(75, 55, 145)
+)
+hopBtn.TextSize = 9
+
+local closeBtn = makeButton(
+    "CERRAR", 156,
+    Color3.fromRGB(55, 60, 75)
+)
+
+--==================================================
+-- INSTANT PROMPT
+-- Reduce el tiempo local de los ProximityPrompt.
+-- El servidor puede seguir aplicando su propia validación.
+--==================================================
+
+local function enableInstantPrompt(obj)
+    if not obj:IsA("ProximityPrompt") then
+        return
+    end
+
+    if originalHoldDurations[obj] == nil then
+        originalHoldDurations[obj] = obj.HoldDuration
+    end
+
+    pcall(function()
+        obj.HoldDuration = 0
+    end)
+end
+
+for _, obj in ipairs(workspace:GetDescendants()) do
+    enableInstantPrompt(obj)
+end
+
+workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA("ProximityPrompt") then
+        task.defer(function()
+            if obj.Parent then
+                enableInstantPrompt(obj)
+            end
+        end)
+    end
+end)
+
+--==================================================
+-- SALIR DE LA TIENDA LENTAMENTE
+-- Busca un ProximityPrompt cuya acción contenga "Exit".
+--==================================================
+
+local function exitShop()
+    local character = player.Character
+    if not character then return false end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+
+    local targetPrompt
+    local targetPart
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt")
+        and obj.Enabled
+        and string.find(
+            string.lower(obj.ActionText),
+            "exit", 1, true
+        ) then
+
+            local parent = obj.Parent
+            local part
+
+            if parent and parent:IsA("BasePart") then
+                part = parent
+            elseif parent then
+                part = parent:FindFirstChildWhichIsA(
+                    "BasePart", true
+                )
+            end
+
+            if part then
+                targetPrompt = obj
+                targetPart = part
+                break
+            end
+        end
+    end
+
+    if not targetPart or not targetPrompt then
+        warn("[PAUL CHEST FARM] No se encontró Exit Shop.")
+        return false
+    end
+
+    -- Acercamiento gradual al punto situado delante de la puerta.
+    local destination =
+        targetPart.Position
+        + targetPart.CFrame.LookVector * 4
+        + Vector3.new(0, 1, 0)
+
+    local distance = (root.Position - destination).Magnitude
+    local steps = math.max(1, math.ceil(distance / 4))
+
+    for i = 1, steps do
+        if not running or closed then
+            return false
+        end
+
+        character = player.Character
+        root = character and character:FindFirstChild(
+            "HumanoidRootPart"
+        )
+
+        if not character or not root then
+            return false
+        end
+
+        local alpha = i / steps
+        local nextPosition =
+            root.Position:Lerp(destination, alpha)
+
+        pcall(function()
+            character:PivotTo(
+                CFrame.new(nextPosition, targetPart.Position)
+            )
+        end)
+
+        task.wait(0.15)
+    end
+
+    task.wait(0.5)
+
+    if not targetPrompt.Parent or not targetPrompt.Enabled then
+        return false
+    end
+
+    pcall(function()
+        targetPrompt:InputHoldBegin()
+        task.wait(math.max(targetPrompt.HoldDuration, 0.1))
+        targetPrompt:InputHoldEnd()
+    end)
+
+    task.wait(1)
+    return true
+end
+
+--==================================================
+-- DETECTAR COFRES
+--==================================================
+
+local function getPart(obj)
+    if obj:IsA("BasePart") then
+        return obj
+    elseif obj:IsA("Model") then
+        return obj.PrimaryPart
+            or obj:FindFirstChildWhichIsA(
+                "BasePart", true
+            )
+    end
+
+    return nil
+end
+
+local function findChests()
+    local list = {}
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model")
+        and string.find(obj.Name, MARKER, 1, true)
+        and not attempted[obj] then
+
+            local prompt = obj:FindFirstChildWhichIsA(
+                "ProximityPrompt", true
+            )
+
+            if prompt and prompt.Enabled then
+                table.insert(list, obj)
+            end
+        end
+    end
+
+    return list
+end
+
+--==================================================
+-- RECOGER COFRE
+--==================================================
+
+local function collectChest(chest)
+    if not chest:IsDescendantOf(workspace) then
+        return true
+    end
+
+    local character = player.Character
+    local root = character and character:FindFirstChild(
+        "HumanoidRootPart"
+    )
+    local part = getPart(chest)
+    local prompt = chest:FindFirstChildWhichIsA(
+        "ProximityPrompt", true
+    )
+
+    if not character or not root or not part
+    or not prompt or not prompt.Enabled then
+        return false
+    end
+
+    local moved = pcall(function()
+        character:PivotTo(
+            part.CFrame + Vector3.new(0, 4, 0)
+        )
+    end)
+
+    if not moved then return false end
+
+    task.wait(0.3)
+
+    pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(math.max(prompt.HoldDuration, 0.1))
+        prompt:InputHoldEnd()
+    end)
+
+    task.wait(0.8)
+
+    return not chest:IsDescendantOf(workspace)
+        or not prompt.Parent
+        or not prompt.Enabled
+end
+
+--==================================================
+-- AUTO EXECUTE
+--==================================================
+
+local function queuePaulScript()
+    local queue = queue_on_teleport
+
+    if not queue and type(syn) == "table" then
+        queue = syn.queue_on_teleport
+    end
+
+    if type(queue) ~= "function" then
+        warn("[PAUL CHEST FARM] Auto execute no disponible.")
+        return false
+    end
+
+    if PAUL_SCRIPT_URL ==
+        "PEGA_AQUI_LA_URL_RAW_DE_PAUL_CHEST_FARM" then
+        warn("[PAUL CHEST FARM] Falta configurar la URL RAW.")
+        return false
+    end
+
+    local code = string.format(
+        'loadstring(game:HttpGet(%q))()',
+        PAUL_SCRIPT_URL
+    )
+
+    local ok, err = pcall(function()
+        queue(code)
+    end)
+
+    if not ok then
+        warn("[PAUL CHEST FARM] Error de auto execute:", err)
+    end
+
+    return ok
+end
+
+--==================================================
+-- SERVER HOP
+--==================================================
+
+local function serverHop()
+    if hopping or closed then return end
+
+    hopping = true
+    status.Text = "Buscando servidor..."
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            queuePaulScript()
+
+            local url =
+                "https://games.roblox.com/v1/games/"
+                .. game.PlaceId
+                .. "/servers/Public?sortOrder=Asc&limit=100"
+
+            local response = game:HttpGet(url)
+            local data = HttpService:JSONDecode(response)
+            local candidates = {}
+
+            for _, server in ipairs(data.data or {}) do
+                if server.id ~= game.JobId
+                and server.playing < server.maxPlayers then
+                    table.insert(candidates, server.id)
+                end
+            end
+
+            assert(
+                #candidates > 0,
+                "No hay servidores públicos disponibles"
+            )
+
+            local target = candidates[
+                math.random(1, #candidates)
+            ]
+
+            TeleportService:TeleportToPlaceInstance(
+                game.PlaceId, target, player
+            )
+        end)
+
+        if not ok then
+            hopping = false
+            status.Text = "Error de server hop"
+            warn("[PAUL CHEST FARM]", err)
+        end
+    end)
+end
+
+--==================================================
+-- AUTO FARM
+--==================================================
+
+local function startFarm()
+    if running or closed then return end
+
+    running = true
+    attempted = {}
+    foundChests = false
+    autoBtn.Text = "AUTO FARM: ON"
+    status.Text = "Saliendo de la tienda..."
+
+    task.spawn(function()
+        exitShop()
+
+        if not running or closed then return end
+
+        task.wait(0.5)
+        local emptySince = nil
+
+        while running and not closed do
+            local chests = findChests()
+
+            if #chests > 0 then
+                foundChests = true
+                emptySince = nil
+
+                status.Text = "Cofres: " .. tostring(#chests)
+
+                local chest = chests[1]
+                local collected = collectChest(chest)
+
+                if collected then
+                    attempted[chest] = true
+                else
+                    -- Reintenta en el siguiente ciclo si sigue disponible.
+                    task.wait(0.5)
+                end
+            else
+                status.Text = "Buscando cofres..."
+
+                if foundChests then
+                    emptySince = emptySince or os.clock()
+
+                    if os.clock() - emptySince >= 5 then
+                        running = false
+                        autoBtn.Text = "AUTO FARM: OFF"
+                        status.Text = "Cambiando de servidor..."
+                        serverHop()
+                        break
+                    end
+                end
+            end
+
+            task.wait(0.4)
+        end
+    end)
+end
+
+--==================================================
+-- BOTONES
+--==================================================
+
+autoBtn.Activated:Connect(function()
+    if running then
+        running = false
+        autoBtn.Text = "AUTO FARM: OFF"
+        status.Text = "Auto farm detenido"
+    else
+        startFarm()
+    end
+end)
+
+stopBtn.Activated:Connect(function()
+    running = false
+    autoBtn.Text = "AUTO FARM: OFF"
+    status.Text = "Detenido"
+end)
+
+hopBtn.Activated:Connect(serverHop)
+
+closeBtn.Activated:Connect(function()
+    running = false
+    closed = true
+    gui:Destroy()
+end)
+
+--==================================================
+-- ARRASTRAR LA UI
+--==================================================
+
+local dragging = false
+local dragStart
+local startPos
+
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+    or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = window.Position
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseMovement
+    ) then
+        local delta = input.Position - dragStart
+
+        window.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+    or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+--==================================================
+-- INICIO AUTOMÁTICO
+--==================================================
+
+task.wait(1)
+startFarm()
+
+print("[PAUL CHEST FARM] Auto farm activado.")
